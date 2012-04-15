@@ -1,0 +1,33 @@
+#!/usr/bin/env ruby
+
+require 'puma'
+require 'puma/server'
+
+require 'puma/express'
+require 'puma/express_dns'
+
+dns = Puma::ExpressDNS.new 9953
+
+dns.run
+
+app = Puma::Express.new
+
+events = Puma::Events.new STDOUT, STDERR
+
+s = Puma::Server.new app, events
+s.min_threads = 0
+s.max_threads = 10
+
+s.add_tcp_listener "127.0.0.1", 9223
+
+Signal.trap "INT" do
+  s.stop
+end
+
+Signal.trap "TERM" do
+  s.stop
+end
+
+s.run.join
+
+app.cleanup
