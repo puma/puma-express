@@ -3,6 +3,8 @@ require 'net/http'
 require 'rubygems'
 require 'tmpdir'
 
+require 'puma/express/app'
+
 class Puma::Express
   VERSION = '1.0.0'
 
@@ -11,66 +13,8 @@ class Puma::Express
     "content-length" => true
   }
 
-  class App
-    def initialize(path, socket, idle_limit)
-      @path = path
-      @socket = socket
-      @idle_limit = idle_limit
-      @last_hit = Time.now
-      @pid = nil
-    end
-
-    def expired?
-      @last_hit && Time.now - @last_hit > @idle_limit
-    end
-
-    def hit
-      @last_hit = Time.now
-    end
-
-    def in_child(ready)
-      Dir.chdir @path
-
-      events = Puma::Events.new STDOUT, STDERR
-
-      app, options = Rack::Builder.parse_file "config.ru"
-
-      s = Puma::Server.new app, events
-      s.min_threads = 0
-      s.max_threads = 10
-
-      s.add_unix_listener @socket
-
-      ready << "!"
-
-      s.run.join
-    end
-
-    def run
-      r, w = IO.pipe
-
-      @pid = fork do
-        begin
-          in_child w
-        rescue Interrupt
-        end
-      end
-
-      r.read 1
-    end
-
-    def stop
-      if @pid
-        Process.kill 'INT', @pid
-        Process.wait @pid
-        @pid = nil
-      end
-    end
-  end
-
   def initialize
     @servers = {}
-    @starter = File.expand_path "../starter.rb", __FILE__
     @root = ENV['PUMA_EXPRESS_ROOT'] || File.expand_path("~/.puma_express")
     @apps = {}
 
@@ -80,6 +24,10 @@ class Puma::Express
   end
 
   def cleanup
+    @apps.each do |h,a|
+      a.stop
+    end
+
     FileUtils.remove_entry_secure @unix_socket_dir
   end
 
@@ -107,23 +55,6 @@ class Puma::Express
     if host
       @apps[key].hit
       [host, path]
-    end
-  end
-
-  class KeepAliveTimer
-    def initialize(idle_limit, app)
-      @last_hit = nil
-      @idle_limit = idle_limit
-      @app = app
-    end
-
-    def call(env)
-      @last_hit = Time.now
-      @app.call env
-    end
-
-    def expired?
-      @last_hit && Time.now - @last_hit > @idle_limit
     end
   end
 
@@ -269,7 +200,7 @@ class Puma::Express
     begin
       proxy_unix env, host, path
     rescue SystemCallError => e
-      error env, "Error with #{host}:#{port}: #{e.message} (#{e.class})"
+      error env, "Error with #{host}: #{e.message} (#{e.class})"
     rescue Exception => e
       error env, "Unknown error: #{e.message} (#{e.class})"
     end
