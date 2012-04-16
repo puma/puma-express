@@ -16,19 +16,18 @@ class Puma::Express
       cf = "#{path}.yml"
 
       @ruby = nil
-      @exec = false
+      @shell = false
 
       if File.exists?(cf)
         @config = YAML.load File.read(cf)
         @ruby = @config['ruby']
       else
-        @config = nil
+        @config = {}
       end
 
-      unless @ruby
-        @exec = File.exists?(File.join(path, ".rvmrc")) ||
-                File.exists?(File.join(path, ".rbenv-version"))
-      end
+      @shell = @config['full_shell'] ||
+               File.exists?(File.join(path, ".rvmrc")) ||
+               File.exists?(File.join(path, ".rbenv-version"))
     end
 
     def expired?
@@ -49,7 +48,7 @@ class Puma::Express
 
         if @ruby
           exec @ruby, Starter, @socket, w.to_i.to_s
-        elsif @exec
+        elsif @shell
           exec "bash", "-l", "-c", "ruby #{Starter} #{@socket} #{w.to_i}"
         else
           ARGV.unshift w.to_i.to_s
