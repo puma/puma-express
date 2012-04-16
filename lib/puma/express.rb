@@ -14,7 +14,7 @@ class Puma::Express
   }
 
   def initialize
-    @servers = {}
+    @running = {}
     @root = ENV['PUMA_EXPRESS_ROOT'] || File.expand_path("~/.puma_express")
     @apps = {}
 
@@ -37,7 +37,7 @@ class Puma::Express
         @apps.delete_if do |host, app|
           if app.expired?
             app.stop
-            @servers.delete host
+            @running.delete host
             true
           else
             false
@@ -49,13 +49,13 @@ class Puma::Express
     end
   end
 
-  def find_host(env)
+  def find_app(env)
     key = env['HTTP_HOST']
-    host, path = @servers[key]
-    if host
-      @apps[key].hit
-      [host, path]
+    if app = @running[key]
+      app.hit
     end
+
+    app
   end
 
   def start(env)
@@ -65,17 +65,15 @@ class Puma::Express
 
     path = File.join @root, base
 
-    socket = File.join @unix_socket_dir, host
-
-    puts "Starting #{base} on #{socket}"
-
     if File.exists? path
-      app = App.new path, socket, 5.0
+      app = App.new host, path, @unix_socket_dir, 5.0
 
       app.run
 
+      puts "Starting #{base} on #{app.connection}"
+
       @apps[host] = app
-      @servers[host] = ["localhost", socket]
+      @running[host] = app
     else
       nil
     end
@@ -86,7 +84,7 @@ class Puma::Express
     [501, {}, ["#{host}: #{message}"]]
   end
 
-  def proxy_unix(env, host, path)
+  def proxy_unix(env, path)
     request = Rack::Request.new(env)
 
     method = request.request_method.downcase
@@ -191,16 +189,20 @@ class Puma::Express
   end
 
   def call(env)
-    host, path = find_host(env)
+    app = find_app(env)
 
-    host, path = start(env) unless host
+    app = start(env) unless app
 
-    return error(env) unless host
+    return error(env) unless app
 
     begin
-      proxy_unix env, host, path
+      if sock = app.unix_socket
+        proxy_unix env, sock
+      else
+        proxy_tcp env, "localhost", app.tcp_port
+      end
     rescue SystemCallError => e
-      error env, "Error with #{host}: #{e.message} (#{e.class})"
+      error env, "Error: #{e.message} (#{e.class})"
     rescue Exception => e
       error env, "Unknown error: #{e.message} (#{e.class})"
     end

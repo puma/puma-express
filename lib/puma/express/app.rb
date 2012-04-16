@@ -6,28 +6,54 @@ class Puma::Express
   class App
     Starter = File.expand_path "../starter.rb", __FILE__
 
-    def initialize(path, socket, idle_limit)
+    def initialize(host, path, tmp_dir, idle_limit)
+      @host = host
       @path = path
-      @socket = socket
+      @tmp_dir = tmp_dir
       @idle_limit = idle_limit
       @last_hit = Time.now
       @pid = nil
-
-      cf = "#{path}.yml"
-
+      @shell = false
       @ruby = nil
       @shell = false
 
+      @unix_socket = nil
+      @tcp_port = nil
+
+      load_config
+    end
+
+    attr_reader :unix_socket, :tcp_port
+
+    def load_config
+      cf = "#{@path}.yml"
+
       if File.exists?(cf)
         @config = YAML.load File.read(cf)
-        @ruby = @config['ruby']
       else
         @config = {}
       end
 
-      @shell = @config['full_shell'] ||
-               File.exists?(File.join(path, ".rvmrc")) ||
-               File.exists?(File.join(path, ".rbenv-version"))
+      if cmd = @config['command']
+        @command = cmd
+      else
+        @ruby = @config['ruby']
+        @shell = @config['full_shell'] ||
+                 File.exists?(File.join(@path, ".rvmrc")) ||
+                 File.exists?(File.join(@path, ".rbenv-version"))
+      end
+
+      unless @tcp_port = @config['port']
+        @unix_socket = File.join @tmp_dir, @host
+      end
+    end
+
+    def connection
+      if @tcp_port
+        "tcp://0.0.0.0:#{@tcp_port}"
+      else
+        "unix://#{@unix_socket}"
+      end
     end
 
     def expired?
@@ -39,20 +65,37 @@ class Puma::Express
     end
 
     def run
+      if @command
+        @pid = fork do
+          ENV['PORT'] = @tcp_port.to_s if @tcp_port
+
+          Dir.chdir @path
+          exec "bash", "-c", @command
+        end
+
+        sleep 1
+      else
+        run_ruby
+      end
+    end
+
+    def run_ruby
       r, w = IO.pipe
 
       @pid = fork do
+        ENV['PORT'] = @tcp_port.to_s if @tcp_port
+
         r.close
 
         Dir.chdir @path
 
         if @ruby
-          exec @ruby, Starter, @socket, w.to_i.to_s
+          exec @ruby, Starter, @unix_socket, w.to_i.to_s
         elsif @shell
-          exec "bash", "-l", "-c", "ruby #{Starter} #{@socket} #{w.to_i}"
+          exec "bash", "-l", "-c", "ruby #{Starter} #{@unix_socket} #{w.to_i}"
         else
           ARGV.unshift w.to_i.to_s
-          ARGV.unshift @socket
+          ARGV.unshift @unix_socket
 
           load Starter
         end
