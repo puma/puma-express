@@ -72,41 +72,38 @@ class Puma::Express
           Dir.chdir @path
           exec "bash", "-c", @command
         end
-
-        sleep 1
       else
         run_ruby
+      end
+
+      begin
+        if @tcp_port
+          TCPSocket.new("localhost", @tcp_port).close
+        else
+          UNIXSocket.new(@unix_socket).close
+        end
+      rescue SystemCallError => e
+        sleep 0.25
+        retry
       end
     end
 
     def run_ruby
-      r, w = IO.pipe
-
       @pid = fork do
         ENV['PORT'] = @tcp_port.to_s if @tcp_port
-
-        r.close
 
         Dir.chdir @path
 
         if @ruby
-          exec @ruby, Starter, @unix_socket, w.to_i.to_s
+          exec @ruby, Starter, @unix_socket
         elsif @shell
-          exec "bash", "-l", "-c", "ruby #{Starter} #{@unix_socket} #{w.to_i}"
+          exec "bash", "-l", "-c", "ruby #{Starter} #{@unix_socket}"
         else
-          ARGV.unshift w.to_i.to_s
           ARGV.unshift @unix_socket
 
           load Starter
         end
       end
-
-      w.close
-
-      IO.select [r]
-
-      r.read 1
-      r.close
     end
 
     def stop

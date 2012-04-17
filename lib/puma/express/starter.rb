@@ -1,34 +1,25 @@
 path = ARGV.shift
-ready = IO.for_fd ARGV.shift.to_i
-ready.sync = true
 
-s = nil
+require 'rubygems'
+require 'puma'
 
-begin
-  require 'rubygems'
-  require 'puma'
+events = Puma::Events.new STDOUT, STDERR
 
-  events = Puma::Events.new STDOUT, STDERR
+app, options = Rack::Builder.parse_file "config.ru"
 
-  app, options = Rack::Builder.parse_file "config.ru"
+s = Puma::Server.new app, events
+s.min_threads = 0
+s.max_threads = 10
 
-  s = Puma::Server.new app, events
-  s.min_threads = 0
-  s.max_threads = 10
+s.add_unix_listener path
 
-  s.add_unix_listener path
-
-  Signal.trap "INT" do
-    s.stop
-  end
-
-  Signal.trap "TERM" do
-    s.stop
-  end
-ensure
-  ready << "!"
-  ready.close
+Signal.trap "INT" do
+  s.stop
 end
 
-s.run.join if s
+Signal.trap "TERM" do
+  s.stop
+end
+
+s.run.join
 
