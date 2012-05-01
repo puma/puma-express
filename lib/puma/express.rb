@@ -13,7 +13,21 @@ class Puma::Express
     "content-length" => true
   }
 
-  def initialize
+  @plugins = {}
+
+  def self.add_plugin(name, obj)
+    @plugins[name] = obj
+  end
+
+  def self.plugin(name)
+    @plugins[name]
+  end
+
+  DefaultPlugins = ["status"]
+
+  def initialize(plugins=DefaultPlugins.dup)
+    @plugins = plugins.map { |i| self.class.plugin(i).new self }
+
     @running = {}
     @root = ENV['PUMA_EXPRESS_ROOT'] || File.expand_path("~/.puma_express")
     @apps = {}
@@ -22,6 +36,8 @@ class Puma::Express
 
     monitor_apps
   end
+
+  attr_reader :apps
 
   def cleanup
     @apps.each do |h,a|
@@ -66,7 +82,7 @@ class Puma::Express
     path = File.join @root, base
 
     if File.exists? path
-      app = App.new host, path, @unix_socket_dir, 5.0
+      app = App.new host, path, @unix_socket_dir, 180.0
 
       app.run
 
@@ -189,6 +205,10 @@ class Puma::Express
   end
 
   def call(env)
+    plugin = @plugins.detect { |i| i.handle?(env) }
+
+    return plugin.call(env) if plugin
+
     app = find_app(env)
 
     app = start(env) unless app
@@ -197,10 +217,16 @@ class Puma::Express
 
     begin
       if sock = app.unix_socket
-        proxy_unix env, sock
+        res = proxy_unix env, sock
       else
-        proxy_tcp env, "localhost", app.tcp_port
+        res = proxy_tcp env, "localhost", app.tcp_port
       end
+
+      @plugins.each do |i|
+        i.add_result(app, env, res)
+      end
+
+      res
     rescue SystemCallError => e
       error env, "Error: #{e.message} (#{e.class})"
     rescue Exception => e
@@ -208,3 +234,5 @@ class Puma::Express
     end
   end
 end
+
+require 'puma/express/status'
